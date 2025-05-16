@@ -7,7 +7,7 @@ export class BatchingScheduler implements Scheduler {
     private rate: number;
     private timerId: ReturnType<typeof setInterval> | null = null;
     private readonly task: AsyncTask;
-    private readonly minInterval = 4; // минимальная разумная задержка таймера, мс
+    private lastTick = Date.now();
 
     constructor(task: AsyncTask, initialRate: number = 1) {
         this.checkRate(initialRate);
@@ -23,7 +23,7 @@ export class BatchingScheduler implements Scheduler {
             this.rate = newRate;
 
             this.timerId.close();
-            this.resetTimer();
+            this.loop();
         }
     }
 
@@ -39,7 +39,7 @@ export class BatchingScheduler implements Scheduler {
     public start(): void {
         if (this.timerId === null) {
             console.log(`Starting scheduler with ${this.rate} tasks/sec`);
-            this.resetTimer();
+            this.loop();
         }
     }
 
@@ -49,23 +49,21 @@ export class BatchingScheduler implements Scheduler {
         }
     }
 
-    private resetTimer(): void {
-        const period = BASE_PERIOD_MS / this.rate;  // мс между одиночными запусками
+    private loop(): void {
+        const now = Date.now();
+        const elapsed = now - this.lastTick;
+        const expectedInterval = BASE_PERIOD_MS / this.rate;
+        const taskCount = Math.floor(elapsed / expectedInterval);
 
-        // Базовый сценарий: Если период больше минимальной разрешённой таймером задержки (≈4 мс), запускаем задачи по одной через setInterval(period).
-        let interval = Math.floor(period);
-        let batchSize = 1;
-
-        // Если период меньше, группируем несколько запусков в «пакет» и ставим setInterval(minInterval)
-        if (period < this.minInterval) {
-            interval = this.minInterval;
-            batchSize = Math.max(1, Math.floor(interval / period));
+        for (let i = 0; i < taskCount; i++) {
+            this.task().catch((e) => console.error(e));
         }
 
-        this.timerId = setInterval(() => {
-            for (let i = 0; i < batchSize; i++) {
-                this.task().catch((error) => console.error(error));
-            }
-        }, interval);
-    }
+        if (taskCount > 0) {
+            this.lastTick += taskCount * expectedInterval;
+        }
+
+        const nextDelay = Math.max(0, expectedInterval - (Date.now() - this.lastTick));
+        this.timerId = setTimeout(this.loop, nextDelay);
+    };
 }
